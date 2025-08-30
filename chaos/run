@@ -5,4 +5,22 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=0.0.0.0:4317
 export OTEL_EXPORTER_OTLP_INSECURE=true
 export OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
 
+
 opentelemetry-instrument python -m chaos.driver "$@"
+
+# export OTEL_SERVICE_NAME=chaos-producer
+# export OTEL_DISTRO=otlp
+# export OTEL_EXPORTER_OTLP_ENDPOINT=0.0.0.0:4317
+# export OTEL_EXPORTER_OTLP_INSECURE=true
+# export OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
+
+# opentelemetry-instrument python -m chaos.producer "$@"
+
+# export OTEL_SERVICE_NAME=chaos-worker
+# export OTEL_DISTRO=otlp
+# export OTEL_EXPORTER_OTLP_ENDPOINT=0.0.0.0:4317
+# export OTEL_EXPORTER_OTLP_INSECURE=true
+# export OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
+
+# opentelemetry-instrument python -m chaos.worker "$@"
+
