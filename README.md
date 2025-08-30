@@ -1,5 +1,28 @@
 shadows represents a sick distributed background task processing framework designed specifically for python applications, emphasizing seamless scheduling capabilities for both immediate and future computational workloads with exceptional efficiency.
 
+## installing shadows
+
+shadow is [available on PyPI](https://pypi.org/project/shadow-task/) under the package name
+`shadow-task`. it targets python 3.12 or above.
+
+with [`uv`](https://docs.astral.sh/uv/):
+
+```bash
+uv pip install shadow-task
+
+or
+
+uv add shadow-task
+```
+
+with `pip`:
+
+```bash
+pip install shadow-task
+```
+
+shadow requires a [redis](http://redis.io/) server with streams support (introduced in redis 5.0.0). shadow is thoroughly tested with redis 6 and 7, ensuring compatibility and reliability.
+
 ## at a glance
 
 ```python
@@ -223,28 +246,6 @@ comprehensive type safety and type awareness for all background task functions
 
 sophisticated dependency injection system similar to fastapi, typer, and fastmcp for reusable resources
 
-## installing shadows
-
-shadow is [available on PyPI](https://pypi.org/project/shadow-task/) under the package name
-`shadow-task`. it targets python 3.12 or above.
-
-with [`uv`](https://docs.astral.sh/uv/):
-
-```bash
-uv pip install shadow-task
-
-or
-
-uv add shadow-task
-```
-
-with `pip`:
-
-```bash
-pip install shadow-task
-```
-
-shadow requires a [redis](http://redis.io/) server with streams support (introduced in redis 5.0.0). shadow is thoroughly tested with redis 6 and 7, ensuring compatibility and reliability.
 
 ## hacking on shadows
 
@@ -263,6 +264,6 @@ pytest
 
 we aim to maintain 100% test coverage, which is required for all prs to `shadows`. we
 believe that `shadows` should stay small, simple, understandable, and reliable, and that
-begins with testing all the dusty branches and corners. this will give us the
+begins with testing all the dusty branches and corners. and thanks dockettho. this will give us the
 confidence to upgrade dependencies quickly and to adapt to new versions of redis over
 time.
