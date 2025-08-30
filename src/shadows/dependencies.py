@@ -1,0 +1,673 @@
+import abc
+import logging
+import time
+from contextlib import AsyncExitStack, asynccontextmanager
+from contextvars import ContextVar
+from datetime import datetime, timedelta, timezone
+from types import TracebackType
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncContextManager,
+    AsyncGenerator,
+    Awaitable,
+    Callable,
+    Counter,
+    Generic,
+    NoReturn,
+    TypeVar,
+    cast,
+)
+
+from .shadows import Shadow
+from .execution import Execution, TaskFunction, get_signature
+from .instrumentation import CACHE_SIZE
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .worker import Worker
+
+
+class Dependency(abc.ABC):
+    single: bool = False
+
+    shadows: ContextVar[Shadow] = ContextVar("shadows")
+    worker: ContextVar["Worker"] = ContextVar("worker")
+    execution: ContextVar[Execution] = ContextVar("execution")
+
+    @abc.abstractmethod
+    async def __aenter__(self) -> Any: ...  # pragma: no cover
+
+    async def __aexit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        _exc_value: BaseException | None,
+        _traceback: TracebackType | None,
+    ) -> bool: ...  # pragma: no cover
+
+
+class _CurrentWorker(Dependency):
+    async def __aenter__(self) -> "Worker":
+        return self.worker.get()
+
+
+def CurrentWorker() -> "Worker":
+    """A dependency to access the current Worker.
+
+    Example:
+
+    ```python
+    @task
+    async def my_task(worker: Worker = CurrentWorker()) -> None:
+        assert isinstance(worker, Worker)
+    ```
+    """
+    return cast("Worker", _CurrentWorker())
+
+
+class _CurrentShadow(Dependency):
+    async def __aenter__(self) -> Shadow:
+        return self.shadows.get()
+
+
+def CurrentShadow() -> Shadow:
+    """A dependency to access the current Shadow.
+
+    Example:
+
+    ```python
+    @task
+    async def my_task(shadows: Shadow = CurrentShadow()) -> None:
+        assert isinstance(shadows, Shadow)
+    ```
+    """
+    return cast(Shadow, _CurrentShadow())
+
+
+class _CurrentExecution(Dependency):
+    async def __aenter__(self) -> Execution:
+        return self.execution.get()
+
+
+def CurrentExecution() -> Execution:
+    """A dependency to access the current Execution.
+
+    Example:
+
+    ```python
+    @task
+    async def my_task(execution: Execution = CurrentExecution()) -> None:
+        assert isinstance(execution, Execution)
+    ```
+    """
+    return cast(Execution, _CurrentExecution())
+
+
+class _TaskKey(Dependency):
+    async def __aenter__(self) -> str:
+        return self.execution.get().key
+
+
+def TaskKey() -> str:
+    """A dependency to access the key of the currently executing task.
+
+    Example:
+
+    ```python
+    @task
+    async def my_task(key: str = TaskKey()) -> None:
+        assert isinstance(key, str)
+    ```
+    """
+    return cast(str, _TaskKey())
+
+
+class _TaskArgument(Dependency):
+    parameter: str | None
+    optional: bool
+
+    def __init__(self, parameter: str | None = None, optional: bool = False) -> None:
+        self.parameter = parameter
+        self.optional = optional
+
+    async def __aenter__(self) -> Any:
+        assert self.parameter is not None
+        execution = self.execution.get()
+        try:
+            return execution.get_argument(self.parameter)
+        except KeyError:
+            if self.optional:
+                return None
+            raise
+
+
+def TaskArgument(parameter: str | None = None, optional: bool = False) -> Any:
+    """A dependency to access a argument of the currently executing task.  This is
+    often useful in dependency functions so they can access the arguments of the
+    task they are injected into.
+
+    Example:
+
+    ```python
+    async def customer_name(customer_id: int = TaskArgument()) -> str:
+        ...look up the customer's name by ID...
+        return "John Doe"
+
+    @task
+    async def greet_customer(customer_id: int, name: str = Depends(customer_name)) -> None:
+        print(f"Hello, {name}!")
+    ```
+    """
+    return cast(Any, _TaskArgument(parameter, optional))
+
+
+class _TaskLogger(Dependency):
+    async def __aenter__(self) -> logging.LoggerAdapter[logging.Logger]:
+        execution = self.execution.get()
+        logger = logging.getLogger(f"shadows.task.{execution.function.__name__}")
+        return logging.LoggerAdapter(
+            logger,
+            {
+                **self.shadows.get().labels(),
+                **self.worker.get().labels(),
+                **execution.specific_labels(),
+            },
+        )
+
+
+def TaskLogger() -> logging.LoggerAdapter[logging.Logger]:
+    """A dependency to access a logger for the currently executing task.  The logger
+    will automatically inject contextual information such as the worker and shadows
+    name, the task key, and the current execution attempt number.
+
+    Example:
+
+    ```python
+    @task
+    async def my_task(logger: LoggerAdapter[Logger] = TaskLogger()) -> None:
+        logger.info("Hello, world!")
+    ```
+    """
+    return cast(logging.LoggerAdapter[logging.Logger], _TaskLogger())
+
+
+class ForcedRetry(Exception):
+    """Raised when a task requests a retry via `in_` or `at`"""
+
+
+class Retry(Dependency):
+    """Configures linear retries for a task.  You can specify the total number of
+    attempts (or `None` to retry indefinitely), and the delay between attempts.
+
+    Example:
+
+    ```python
+    @task
+    async def my_task(retry: Retry = Retry(attempts=3)) -> None:
+        ...
+    ```
+    """
+
+    single: bool = True
+
+    def __init__(
+        self, attempts: int | None = 1, delay: timedelta = timedelta(0)
+    ) -> None:
+        """
+        Args:
+            attempts: The total number of attempts to make.  If `None`, the task will
+                be retried indefinitely.
+            delay: The delay between attempts.
+        """
+        self.attempts = attempts
+        self.delay = delay
+        self.attempt = 1
+
+    async def __aenter__(self) -> "Retry":
+        execution = self.execution.get()
+        retry = Retry(attempts=self.attempts, delay=self.delay)
+        retry.attempt = execution.attempt
+        return retry
+
+    def at(self, when: datetime) -> NoReturn:
+        now = datetime.now(timezone.utc)
+        diff = when - now
+        diff = diff if diff.total_seconds() >= 0 else timedelta(0)
+
+        self.in_(diff)
+
+    def in_(self, when: timedelta) -> NoReturn:
+        self.delay: timedelta = when
+        raise ForcedRetry()
+
+
+class ExponentialRetry(Retry):
+    """Configures exponential retries for a task.  You can specify the total number
+    of attempts (or `None` to retry indefinitely), and the minimum and maximum delays
+    between attempts.
+
+    Example:
+
+    ```python
+    @task
+    async def my_task(retry: ExponentialRetry = ExponentialRetry(attempts=3)) -> None:
+        ...
+    ```
+    """
+
+    def __init__(
+        self,
+        attempts: int | None = 1,
+        minimum_delay: timedelta = timedelta(seconds=1),
+        maximum_delay: timedelta = timedelta(seconds=64),
+    ) -> None:
+        """
+        Args:
+            attempts: The total number of attempts to make.  If `None`, the task will
+                be retried indefinitely.
+            minimum_delay: The minimum delay between attempts.
+            maximum_delay: The maximum delay between attempts.
+        """
+        super().__init__(attempts=attempts, delay=minimum_delay)
+        self.maximum_delay = maximum_delay
+
+    async def __aenter__(self) -> "ExponentialRetry":
+        execution = self.execution.get()
+
+        retry = ExponentialRetry(
+            attempts=self.attempts,
+            minimum_delay=self.delay,
+            maximum_delay=self.maximum_delay,
+        )
+        retry.attempt = execution.attempt
+
+        if execution.attempt > 1:
+            backoff_factor = 2 ** (execution.attempt - 1)
+            calculated_delay = self.delay * backoff_factor
+
+            if calculated_delay > self.maximum_delay:
+                retry.delay = self.maximum_delay
+            else:
+                retry.delay = calculated_delay
+
+        return retry
+
+
+class Perpetual(Dependency):
+    """Declare a task that should be run perpetually.  Perpetual tasks are automatically
+    rescheduled for the future after they finish (whether they succeed or fail).  A
+    perpetual task can be scheduled at worker startup with the `automatic=True`.
+
+    Example:
+
+    ```python
+    @task
+    async def my_task(perpetual: Perpetual = Perpetual()) -> None:
+        ...
+    ```
+    """
+
+    single = True
+
+    every: timedelta
+    automatic: bool
+
+    args: tuple[Any, ...]
+    kwargs: dict[str, Any]
+
+    cancelled: bool
+
+    def __init__(
+        self,
+        every: timedelta = timedelta(0),
+        automatic: bool = False,
+    ) -> None:
+        """
+        Args:
+            every: The target interval between task executions.
+            automatic: If set, this task will be automatically scheduled during worker
+                startup and continually through the worker's lifespan.  This ensures
+                that the task will always be scheduled despite crashes and other
+                adverse conditions.  Automatic tasks must not require any arguments.
+        """
+        self.every = every
+        self.automatic = automatic
+        self.cancelled = False
+
+    async def __aenter__(self) -> "Perpetual":
+        execution = self.execution.get()
+        perpetual = Perpetual(every=self.every)
+        perpetual.args = execution.args
+        perpetual.kwargs = execution.kwargs
+        return perpetual
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+    def perpetuate(self, *args: Any, **kwargs: Any) -> None:
+        self.args = args
+        self.kwargs = kwargs
+
+
+class Timeout(Dependency):
+    """Configures a timeout for a task.  You can specify the base timeout, and the
+    task will be cancelled if it exceeds this duration.  The timeout may be extended
+    within the context of a single running task.
+
+    Example:
+
+    ```python
+    @task
+    async def my_task(timeout: Timeout = Timeout(timedelta(seconds=10))) -> None:
+        ...
+    ```
+    """
+
+    single: bool = True
+
+    base: timedelta
+    _deadline: float
+
+    def __init__(self, base: timedelta) -> None:
+        """
+        Args:
+            base: The base timeout duration.
+        """
+        self.base = base
+
+    async def __aenter__(self) -> "Timeout":
+        timeout = Timeout(base=self.base)
+        timeout.start()
+        return timeout
+
+    def start(self) -> None:
+        self._deadline = time.monotonic() + self.base.total_seconds()
+
+    def expired(self) -> bool:
+        return time.monotonic() >= self._deadline
+
+    def remaining(self) -> timedelta:
+        """Get the remaining time until the timeout expires."""
+        return timedelta(seconds=self._deadline - time.monotonic())
+
+    def extend(self, by: timedelta | None = None) -> None:
+        """Extend the timeout by a given duration.  If no duration is provided, the
+        base timeout will be used.
+
+        Args:
+            by: The duration to extend the timeout by.
+        """
+        if by is None:
+            by = self.base
+        self._deadline += by.total_seconds()
+
+
+R = TypeVar("R")
+
+DependencyFunction = Callable[..., Awaitable[R] | AsyncContextManager[R]]
+
+
+_parameter_cache: dict[
+    TaskFunction | DependencyFunction[Any],
+    dict[str, Dependency],
+] = {}
+
+
+def get_dependency_parameters(
+    function: TaskFunction | DependencyFunction[Any],
+) -> dict[str, Dependency]:
+    if function in _parameter_cache:
+        CACHE_SIZE.set(len(_parameter_cache), {"cache": "parameter"})
+        return _parameter_cache[function]
+
+    dependencies: dict[str, Dependency] = {}
+
+    signature = get_signature(function)
+
+    for parameter, param in signature.parameters.items():
+        if not isinstance(param.default, Dependency):
+            continue
+
+        dependencies[parameter] = param.default
+
+    _parameter_cache[function] = dependencies
+    CACHE_SIZE.set(len(_parameter_cache), {"cache": "parameter"})
+    return dependencies
+
+
+class _Depends(Dependency, Generic[R]):
+    dependency: DependencyFunction[R]
+
+    cache: ContextVar[dict[DependencyFunction[Any], Any]] = ContextVar("cache")
+    stack: ContextVar[AsyncExitStack] = ContextVar("stack")
+
+    def __init__(
+        self, dependency: Callable[[], Awaitable[R] | AsyncContextManager[R]]
+    ) -> None:
+        self.dependency = dependency
+
+    async def _resolve_parameters(
+        self,
+        function: TaskFunction | DependencyFunction[Any],
+    ) -> dict[str, Any]:
+        stack = self.stack.get()
+
+        arguments: dict[str, Any] = {}
+        parameters = get_dependency_parameters(function)
+
+        for parameter, dependency in parameters.items():
+            # Special case for TaskArguments, they are "magical" and infer the parameter
+            # they refer to from the parameter name (unless otherwise specified)
+            if isinstance(dependency, _TaskArgument) and not dependency.parameter:
+                dependency.parameter = parameter
+
+            arguments[parameter] = await stack.enter_async_context(dependency)
+
+        return arguments
+
+    async def __aenter__(self) -> R:
+        cache = self.cache.get()
+
+        if self.dependency in cache:
+            return cache[self.dependency]
+
+        stack = self.stack.get()
+        arguments = await self._resolve_parameters(self.dependency)
+
+        value = self.dependency(**arguments)
+
+        if isinstance(value, AsyncContextManager):
+            value = await stack.enter_async_context(value)
+        else:
+            value = await value
+
+        cache[self.dependency] = value
+        return value
+
+
+def Depends(dependency: DependencyFunction[R]) -> R:
+    """Include a user-defined function as a dependency.  Dependencies may either return
+    a value or an async context manager.  If it returns a context manager, the
+    dependency will be entered and exited around the task, giving an opportunity to
+    control the lifetime of a resource, like a database connection.
+
+    Example:
+
+    ```python
+
+    async def my_dependency() -> str:
+        return "Hello, world!"
+
+    @task async def my_task(dependency: str = Depends(my_dependency)) -> None:
+        print(dependency)
+
+    ```
+    """
+    return cast(R, _Depends(dependency))
+
+
+class ConcurrencyLimit(Dependency):
+    """Configures concurrency limits for a task based on specific argument values.
+
+    This allows fine-grained control over task execution by limiting concurrent
+    tasks based on the value of specific arguments.
+
+    Example:
+
+    ```python
+    async def process_customer(
+        customer_id: int,
+        concurrency: ConcurrencyLimit = ConcurrencyLimit("customer_id", max_concurrent=1)
+    ) -> None:
+        # Only one task per customer_id will run at a time
+        ...
+
+    async def backup_db(
+        db_name: str,
+        concurrency: ConcurrencyLimit = ConcurrencyLimit("db_name", max_concurrent=3)
+    ) -> None:
+        # Only 3 backup tasks per database name will run at a time
+        ...
+    ```
+    """
+
+    single: bool = True
+
+    def __init__(
+        self, argument_name: str, max_concurrent: int = 1, scope: str | None = None
+    ) -> None:
+        """
+        Args:
+            argument_name: The name of the task argument to use for concurrency grouping
+            max_concurrent: Maximum number of concurrent tasks per unique argument value
+            scope: Optional scope prefix for Redis keys (defaults to shadows name)
+        """
+        self.argument_name = argument_name
+        self.max_concurrent = max_concurrent
+        self.scope = scope
+        self._concurrency_key: str | None = None
+        self._initialized: bool = False
+
+    async def __aenter__(self) -> "ConcurrencyLimit":
+        execution = self.execution.get()
+        shadows = self.shadows.get()
+
+        # Get the argument value to group by
+        try:
+            argument_value = execution.get_argument(self.argument_name)
+        except KeyError:
+            # If argument not found, create a bypass limit that doesn't apply concurrency control
+            limit = ConcurrencyLimit(
+                self.argument_name, self.max_concurrent, self.scope
+            )
+            limit._concurrency_key = None  # Special marker for bypassed concurrency
+            limit._initialized = True  # Mark as initialized but bypassed
+            return limit
+
+        # Create a concurrency key for this specific argument value
+        scope = self.scope or shadows.name
+        self._concurrency_key = (
+            f"{scope}:concurrency:{self.argument_name}:{argument_value}"
+        )
+
+        limit = ConcurrencyLimit(self.argument_name, self.max_concurrent, self.scope)
+        limit._concurrency_key = self._concurrency_key
+        limit._initialized = True  # Mark as initialized
+        return limit
+
+    @property
+    def concurrency_key(self) -> str | None:
+        """Redis key used for tracking concurrency for this specific argument value.
+        Returns None when concurrency control is bypassed due to missing arguments.
+        Raises RuntimeError if accessed before initialization."""
+        if not self._initialized:
+            raise RuntimeError(
+                "ConcurrencyLimit not initialized - use within task context"
+            )
+        return self._concurrency_key
+
+    @property
+    def is_bypassed(self) -> bool:
+        """Returns True if concurrency control is bypassed due to missing arguments."""
+        return self._initialized and self._concurrency_key is None
+
+
+D = TypeVar("D", bound=Dependency)
+
+
+def get_single_dependency_parameter_of_type(
+    function: TaskFunction, dependency_type: type[D]
+) -> D | None:
+    assert dependency_type.single, "Dependency must be single"
+    for _, dependency in get_dependency_parameters(function).items():
+        if isinstance(dependency, dependency_type):
+            return dependency
+    return None
+
+
+def get_single_dependency_of_type(
+    dependencies: dict[str, Dependency], dependency_type: type[D]
+) -> D | None:
+    assert dependency_type.single, "Dependency must be single"
+    for _, dependency in dependencies.items():
+        if isinstance(dependency, dependency_type):
+            return dependency
+    return None
+
+
+def validate_dependencies(function: TaskFunction) -> None:
+    parameters = get_dependency_parameters(function)
+
+    counts = Counter(type(dependency) for dependency in parameters.values())
+
+    for dependency_type, count in counts.items():
+        if dependency_type.single and count > 1:
+            raise ValueError(
+                f"Only one {dependency_type.__name__} dependency is allowed per task"
+            )
+
+
+class FailedDependency:
+    def __init__(self, parameter: str, error: Exception) -> None:
+        self.parameter = parameter
+        self.error = error
+
+
+@asynccontextmanager
+async def resolved_dependencies(
+    worker: "Worker", execution: Execution
+) -> AsyncGenerator[dict[str, Any], None]:
+    # Set context variables once at the beginning
+    Dependency.shadows.set(worker.shadows)
+    Dependency.worker.set(worker)
+    Dependency.execution.set(execution)
+
+    _Depends.cache.set({})
+
+    async with AsyncExitStack() as stack:
+        _Depends.stack.set(stack)
+
+        arguments: dict[str, Any] = {}
+
+        parameters = get_dependency_parameters(execution.function)
+        for parameter, dependency in parameters.items():
+            kwargs = execution.kwargs
+            if parameter in kwargs:
+                arguments[parameter] = kwargs[parameter]
+                continue
+
+            # Special case for TaskArguments, they are "magical" and infer the parameter
+            # they refer to from the parameter name (unless otherwise specified).  At
+            # the top-level task function call, it doesn't make sense to specify one
+            # _without_ a parameter name, so we'll call that a failed dependency.
+            if isinstance(dependency, _TaskArgument) and not dependency.parameter:
+                arguments[parameter] = FailedDependency(
+                    parameter, ValueError("No parameter name specified")
+                )
+                continue
+
+            try:
+                arguments[parameter] = await stack.enter_async_context(dependency)
+            except Exception as error:
+                arguments[parameter] = FailedDependency(parameter, error)
+
+        yield arguments

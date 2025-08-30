@@ -1,0 +1,93 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "shadow-task"
+version = "0.1.0"
+description = "distributed background task system for python functions"
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [{ name = "SRSWTI Research Labs", email = "team@srswti.com" }]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Typing :: Typed",
+]
+dependencies = [
+    "cloudpickle>=3.1.1",
+    "opentelemetry-api>=1.30.0",
+    "opentelemetry-exporter-prometheus>=0.51b0",
+    "prometheus-client>=0.21.1",
+    "python-json-logger>=3.2.1",
+    "redis>=4.6",
+    "rich>=13.9.4",
+    "typer>=0.15.1",
+    "uuid7>=0.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "codespell>=2.4.1",
+    "docker>=7.1.0",
+    "ipython>=9.0.1",
+    "mypy>=1.14.1",
+    "opentelemetry-distro>=0.51b0",
+    "opentelemetry-exporter-otlp>=1.30.0",
+    "opentelemetry-instrumentation>=0.51b0",
+    "opentelemetry-instrumentation-logging>=0.51b0",
+    "opentelemetry-instrumentation-redis>=0.51b0",
+    "opentelemetry-sdk>=1.30.0",
+    "pre-commit>=4.1.0",
+    "pyright>=1.1.398",
+    "pytest>=8.3.4",
+    "pytest-aio>=1.9.0",
+    "pytest-cov>=6.0.0",
+    "pytest-xdist>=3.6.1",
+    "ruff>=0.9.7",
+]
+
+docs = [
+    "mkdocs>=1.5.3",
+    "mkdocs-material>=9.5.13",
+    "mkdocstrings>=0.24.1",
+    "mkdocstrings-python>=1.8.0",
+]
+
+[project.scripts]
+shadows = "shadows.__main__:app"
+
+[project.urls]
+"Homepage" = "https://github.com/SRSWTI/shadows"
+"Bug Tracker" = "https://github.com/SRSWTI/shadows/issues"
+
+# [tool.hatch.version]
+# source = "vcs"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/shadows"]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.pytest.ini_options]
+addopts = [
+    "--numprocesses=logical",
+    "--maxprocesses=4",
+    "--cov=src/shadows",
+    "--cov=tests",
+    "--cov-report=term-missing",
+    "--cov-branch",
+]
+filterwarnings = ["error"]
+
+[tool.pyright]
+include = ["src", "tests"]
+typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"

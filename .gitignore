@@ -1,0 +1,11 @@
+*.egg-info
+*.py[oc]
+.coverage
+.envrc
+.python-version
+.venv
+.worktrees/
+__pycache__/
+build/
+dist/
+wheels/
