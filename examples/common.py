@@ -7,6 +7,7 @@ from typing import AsyncGenerator
 from docker import DockerClient
 
 
+##TODO refactor this to use a docker compose file AND better socket pindings using a port manager
 @asynccontextmanager
 async def run_redis(version: str) -> AsyncGenerator[str, None]:
     def get_free_port() -> int:

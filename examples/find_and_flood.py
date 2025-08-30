@@ -34,17 +34,18 @@ async def flood(
     logger.info("Completed processing item %s", item)
 
 
-async def monitor(
-    shadows: Shadow = CurrentShadow(),
-    logger: LoggerAdapter[Logger] = TaskLogger(),
-    perpetual: Perpetual = Perpetual(every=timedelta(seconds=5), automatic=True),
-) -> None:
-    logger.info("Running monitoring check")
-    pending_tasks = await shadows.pending_count()
-    logger.info("Current pending tasks: %d", pending_tasks)
+    # async def monitor(
+    #     shadows: Shadow = CurrentShadow(),
+    #     logger: LoggerAdapter[Logger] = TaskLogger(),
+    #     perpetual: Perpetual = Perpetual(every=timedelta(seconds=5), automatic=True),
+    # ) -> None:
+    #     logger.info("Running monitoring check")
+    #     pending_tasks = await shadows.pending_count()
+    #     logger.info("Current pending tasks: %d", pending_tasks)
 
 
-tasks = [find, flood, monitor]
+# tasks = [find, flood, monitor]
+tasks = [find, flood]
 
 
 if __name__ == "__main__":
