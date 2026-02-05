@@ -158,12 +158,19 @@ class Worker:
         healthcheck_port: int | None = None,
         metrics_port: int | None = None,
         tasks: list[str] = ["shadows.tasks:standard_tasks"],
+        enable_local_queue: bool = False,
+        local_queue_size: int = 1000,
     ) -> None:
         with (
             healthcheck_server(port=healthcheck_port),
             metrics_server(port=metrics_port),
         ):
-            async with Shadow(name=shadows_name, url=url) as shadows:
+            async with Shadow(
+                name=shadows_name,
+                url=url,
+                enable_local_queue=enable_local_queue,
+                local_queue_size=local_queue_size,
+            ) as shadows:
                 for task_path in tasks:
                     shadows.register_collection(task_path)
 
@@ -249,7 +256,7 @@ class Worker:
             self._scheduler_loop(redis, worker_stopping)
         )
 
-        active_tasks: dict[asyncio.Task[None], RedisMessageID] = {}
+        active_tasks: dict[asyncio.Task[None], RedisMessageID | None] = {}
         task_executions: dict[asyncio.Task[None], Execution] = {}
         available_slots = self.concurrency
 
@@ -319,7 +326,8 @@ class Worker:
                 message_id = active_tasks.pop(task)
                 task_executions.pop(task)
                 await task
-                await ack_message(redis, message_id)
+                if message_id is not None:
+                    await ack_message(redis, message_id)
 
         async def ack_message(redis: Redis, message_id: RedisMessageID) -> None:
             logger.debug("Acknowledging message", extra=log_context)
@@ -344,7 +352,36 @@ class Worker:
                 available_slots = self.concurrency - len(active_tasks)
 
                 if available_slots <= 0:
-                    await asyncio.sleep(self.minimum_check_interval.total_seconds())
+                    if active_tasks:
+                        # Wait for at least one task to complete or timeout
+                        # This allows significantly higher throughput for fast tasks
+                        done, _ = await asyncio.wait(
+                            active_tasks.keys(),
+                            timeout=self.minimum_check_interval.total_seconds(),
+                            return_when=asyncio.FIRST_COMPLETED
+                        )
+                    else:
+                         # Should be unreachable if slots <= 0 and concurrency > 0, but for safety
+                        await asyncio.sleep(self.minimum_check_interval.total_seconds())
+                    continue
+
+                # Check local queue first
+                if self.shadows._local_queue:
+                    while available_slots > 0:
+                        try:
+                            # We can use get_nowait because we only care if immediate work exists
+                            local_execution = self.shadows._local_queue.get_nowait()
+                            
+                            # Start local task
+                            task = asyncio.create_task(self._execute(local_execution), name=local_execution.key)
+                            active_tasks[task] = None # No Redis message ID
+                            task_executions[task] = local_execution
+                            
+                            available_slots -= 1
+                        except asyncio.QueueEmpty:
+                            break
+
+                if available_slots <= 0:
                     continue
 
                 for source in [get_redeliveries, get_new_deliveries]:

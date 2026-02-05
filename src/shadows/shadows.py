@@ -152,6 +152,8 @@ class Shadow:
         url: str = "redis://localhost:6379/0",
         heartbeat_interval: timedelta = timedelta(seconds=2),
         missed_heartbeats: int = 5,
+        enable_local_queue: bool = False,
+        local_queue_size: int = 1000,
     ) -> None:
         """
         Args:
@@ -165,13 +167,22 @@ class Shadow:
             heartbeat_interval: How often workers send heartbeat messages to the shadows.
             missed_heartbeats: How many heartbeats a worker can miss before it is
                 considered dead.
+            enable_local_queue: Whether to enable an in-memory queue for task passing
+                between the Shadow and Workers running in the same process.
+            local_queue_size: The maximum size of the local in-memory queue.
         """
         self.name = name
         self.url = url
         self.heartbeat_interval = heartbeat_interval
         self.missed_heartbeats = missed_heartbeats
+        self.enable_local_queue = enable_local_queue
+        self.local_queue_size = local_queue_size
         self._schedule_task_script = None
         self._cancel_task_script = None
+
+        self._local_queue: asyncio.Queue[Execution] | None = (
+            asyncio.Queue(maxsize=local_queue_size) if enable_local_queue else None
+        )
 
     @property
     def worker_group_name(self) -> str:
@@ -460,6 +471,23 @@ class Shadow:
                 },
             )
             return
+
+        if (
+            self._local_queue is not None
+            and not replace
+            and execution.when <= datetime.now(timezone.utc)
+        ):
+            try:
+                self._local_queue.put_nowait(execution)
+                known_task_key = self.known_task_key(execution.key)
+                # We still need to mark the task as known/started?
+                # Actually, local tasks bypass Redis state entirely.
+                # But we should log headers/metrics.
+                TASKS_ADDED.add(1, {**self.labels(), **execution.general_labels()})
+                TASKS_SCHEDULED.add(1, {**self.labels(), **execution.general_labels()})
+                return
+            except asyncio.QueueFull:
+                pass
 
         message: dict[bytes, bytes] = execution.as_message()
         propagate.inject(message, setter=message_setter)
