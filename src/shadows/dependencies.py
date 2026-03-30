@@ -194,6 +194,8 @@ class ForcedRetry(Exception):
     """Raised when a task requests a retry via `in_` or `at`"""
 
 
+# TODO: Consider adding jitter to retry delays to prevent thundering herd problems
+# TODO: Add support for custom retry strategies (decorrelated, equal, full)
 class Retry(Dependency):
     """Configures linear retries for a task.  You can specify the total number of
     attempts (or `None` to retry indefinitely), and the delay between attempts.
@@ -305,6 +307,9 @@ class Perpetual(Dependency):
         ...
     ```
     """
+    # TODO: Add max runtime protection to prevent perpetual tasks from running too long
+    # TODO: Consider adding circuit breaker integration for failing perpetual tasks
+    # TODO: Add support for cron-like scheduling expressions in addition to timedelta
 
     single = True
 

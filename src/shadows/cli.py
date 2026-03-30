@@ -145,6 +145,7 @@ def interpret_python_value(value: str | None) -> Any:
 @app.command(
     help="Print the version of shadows",
 )
+# TODO: Add a --verbose flag for detailed version info (Python version, Redis version, etc.)
 def version() -> None:
     print(__version__)
 
@@ -276,6 +277,8 @@ def worker(
         ),
     ] = None,
 ) -> None:
+    # TODO: Add --config-file option to load worker settings from a configuration file
+    # TODO: Consider adding graceful shutdown timeout configuration option
     asyncio.run(
         Worker.run(
             shadows_name=shadows_,

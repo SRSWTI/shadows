@@ -136,6 +136,8 @@ def redis_port(redis_server: Container) -> int:
 
 @pytest.fixture(scope="session")
 def redis_db(worker_id: str) -> int:
+    # TODO: Consider adding Redis Cluster support for parallel test execution
+    # TODO: Add option to use external Redis instance via environment variable
     if not worker_id or "gw" not in worker_id:
         return 0  # pragma: no cover
     else:

@@ -74,6 +74,9 @@ class Execution:
 
     @classmethod
     def from_message(cls, function: TaskFunction, message: Message) -> Self:
+        # TODO: Add validation for message field presence and format
+        # TODO: Consider using a more efficient serialization format for large args/kwargs
+        # TODO: Add compression support for large serialized payloads
         return cls(
             function=function,
             args=cloudpickle.loads(message[b"args"]),
@@ -251,6 +254,9 @@ TaskStrikes = dict[str, ParameterStrikes]
 
 
 class StrikeList:
+    # TODO: Add persistence for strike conditions to survive worker restarts
+    # TODO: Consider adding strike expiration (time-based auto-restore)
+    # TODO: Add audit logging for all strike/restore operations
     task_strikes: TaskStrikes
     parameter_strikes: ParameterStrikes
     _conditions: list[Callable[[Execution], bool]]

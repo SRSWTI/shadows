@@ -100,6 +100,17 @@ class Worker:
         scheduling_resolution: timedelta = timedelta(milliseconds=250),
         schedule_automatic_tasks: bool = True,
     ) -> None:
+        """
+        Args:
+            shadows: The Shadow to execute tasks from.
+            name: The name of the worker.  If not provided, a default name will be generated.
+            concurrency: The maximum number of tasks to process concurrently.
+            redelivery_timeout: How long to wait before redelivering a task to another worker.
+            reconnection_delay: How long to wait before reconnecting to the Redis server after a connection error.
+            minimum_check_interval: The minimum interval to check for tasks.
+            scheduling_resolution: How frequently to check for future tasks to be scheduled.
+            schedule_automatic_tasks: Whether to schedule automatic tasks during worker startup.
+        """
         self.shadows = shadows
         self.name = name or f"{socket.gethostname()}#{os.getpid()}"
         self.concurrency = concurrency
@@ -108,6 +119,10 @@ class Worker:
         self.minimum_check_interval = minimum_check_interval
         self.scheduling_resolution = scheduling_resolution
         self.schedule_automatic_tasks = schedule_automatic_tasks
+
+        # TODO: Add graceful shutdown timeout configuration
+        # TODO: Add task execution timeout per-task-type configuration
+        # TODO: Consider adding worker priority/weight for weighted task distribution
 
     async def __aenter__(self) -> Self:
         self._heartbeat_task = asyncio.create_task(self._heartbeat())
@@ -247,6 +262,9 @@ class Worker:
                 await asyncio.sleep(self.reconnection_delay.total_seconds())
 
     async def _worker_loop(self, redis: Redis, forever: bool = False):
+        # TODO: Add circuit breaker pattern for Redis connection failures
+        # TODO: Consider implementing backpressure when queue depth exceeds threshold
+        # TODO: Add worker warmup/cooldown hooks for graceful scaling
         worker_stopping = asyncio.Event()
 
         if self.schedule_automatic_tasks:
@@ -545,6 +563,9 @@ class Worker:
         await redis.delete(known_task_key, stream_id_key)
 
     async def _execute(self, execution: Execution) -> None:
+        # TODO: Consider breaking this method into smaller focused methods for better maintainability
+        # TODO: Add early-exit hooks for task cancellation before execution starts
+        # TODO: Consider adding task execution middleware/hooks for cross-cutting concerns
         log_context = {**self._log_context(), **execution.specific_labels()}
         counter_labels = {**self.labels(), **execution.general_labels()}
 

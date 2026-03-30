@@ -8,6 +8,10 @@ from shadows import CurrentShadow, Depends, Shadow, Retry, TaskKey
 
 logger = logging.getLogger(__name__)
 
+# TODO: Add more chaos scenarios: memory pressure, CPU exhaustion, network latency injection
+# TODO: Consider adding configurable chaos intensity levels (low/medium/high)
+# TODO: Add task that simulates slow consumers to test redelivery behavior
+
 
 async def greeting() -> str:
     return "Hello, world"

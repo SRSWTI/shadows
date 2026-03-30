@@ -180,6 +180,10 @@ class Shadow:
         self._schedule_task_script = None
         self._cancel_task_script = None
 
+        # TODO: Add connection pool configuration options (max_connections, retry_on_timeout)
+        # TODO: Consider adding Redis sentinel support for high availability
+        # TODO: Add option to configure Redis key prefix for multi-tenant scenarios
+
         self._local_queue: asyncio.Queue[Execution] | None = (
             asyncio.Queue(maxsize=local_queue_size) if enable_local_queue else None
         )
@@ -194,6 +198,8 @@ class Shadow:
         self.tasks = {fn.__name__: fn for fn in standard_tasks}
         self.strike_list = StrikeList()
 
+        # TODO: Allow passing a custom connection pool instead of creating one
+        # TODO: Add connection retry logic with exponential backoff for initial connection
         self._connection_pool = ConnectionPool.from_url(self.url)  # type: ignore
         self._monitor_strikes_task = asyncio.create_task(self._monitor_strikes())
 
@@ -498,6 +504,8 @@ class Shadow:
         is_immediate = when <= datetime.now(timezone.utc)
 
         # Lock per task key to prevent race conditions between concurrent operations
+        # TODO: Consider using a single global lock or lock pooling to reduce Redis lock key proliferation
+        # TODO: Add lock timeout handling and retry logic for lock acquisition failures
         async with redis.lock(f"{known_task_key}:lock", timeout=10):
             if self._schedule_task_script is None:
                 self._schedule_task_script = cast(
@@ -505,6 +513,8 @@ class Shadow:
                     redis.register_script(
                         # KEYS: stream_key, known_key, parked_key, queue_key, stream_id_key
                         # ARGV: task_key, when_timestamp, is_immediate, replace, ...message_fields
+                        # TODO: Consider adding task priority support in the Lua script
+                        # TODO: Add batch scheduling support for multiple tasks in one atomic operation
                         """
                         local stream_key = KEYS[1]
                         local known_key = KEYS[2]
@@ -741,6 +751,10 @@ class Shadow:
         Returns:
             A snapshot of the Shadow.
         """
+        # TODO: Add pagination support for large shadows with thousands of tasks
+        # TODO: Add filtering options (by task type, by status, by time range)
+        # TODO: Consider caching recent snapshots to reduce Redis load
+        # TODO: Add metrics for snapshot latency and size
         running: list[RunningExecution] = []
         future: list[Execution] = []
 
