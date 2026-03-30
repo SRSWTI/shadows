@@ -26,6 +26,10 @@ from shadows.execution import Execution
 from shadows.tasks import standard_tasks
 from shadows.worker import ms
 
+# TODO: Add tests for worker behavior under Redis memory pressure
+# TODO: Consider adding benchmarks to track performance regressions
+# TODO: Add tests for graceful shutdown with long-running tasks
+
 
 async def test_worker_acknowledges_messages(
     shadows: Shadow, worker: Worker, the_task: AsyncMock

@@ -5,6 +5,9 @@ don't need to cover detailed edge cases.  Keep these tests as straightforward an
 as possible to aid with understanding shadows.
 """
 
+# TODO: Consider adding property-based tests using hypothesis for robustness
+# TODO: Add integration tests with different Redis versions (6.x, 7.x, Valkey)
+
 import asyncio
 import logging
 from contextlib import asynccontextmanager

@@ -41,6 +41,9 @@ from shadows import (
 )
 from common import run_redis
 
+# TODO: Add example of handling partial failures in chunked processing
+# TODO: Consider adding S3/storage integration example for real-world usage
+
 
 class FileType(Enum):
     IMAGE = "image"
